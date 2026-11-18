@@ -1,0 +1,481 @@
+<h3>图片上传</h3>
+<div class="radio-row">
+  <label><input type="radio" name="dest" value="builtin" checked> 内置</label>
+  <label><input type="radio" name="dest" value="ext"> 💾 外挂</label>
+</div>
+<div class="ext-info" id="extInfo">外挂: 检测中...</div>
+
+<input type="file" id="file" accept="image/*">
+<br>
+
+<div class="setting-row" style="margin-top:8px;">
+  <label>文件名：</label>
+  <input type="text" id="customName" maxlength="24" placeholder="留空=自动命名" style="flex:1 1 200px;">
+  <span id="nameHint" style="font-size:12px;color:#888;"></span>
+</div>
+
+<div class="setting-row" style="margin-top:6px;">
+  <label>画布方向：</label>
+  <select id="canvasMode" style="flex:0 0 160px;">
+    <option value="portrait" selected>竖屏 (552×768)</option>
+    <option value="landscape">横屏 (768×552)</option>
+  </select>
+
+  <label style="margin-left:10px;">操作：</label>
+  <button id="rotateBtn" style="flex:0 0 auto; margin:0; padding:6px 12px; background:#0070c0; color:white;">🔄 旋转</button>
+  <button id="resetBtn" style="flex:0 0 auto; margin:0 0 0 4px; padding:6px 12px; background:#888; color:white;">↺ 重置</button>
+</div>
+
+<div class="setting-row" style="margin-top:6px;">
+  <label>色彩模式：</label>
+  <select id="colorMode" style="flex:0 0 160px;">
+    <option value="4color">4 色（黑/白/黄/红）</option>
+    <option value="bw">黑白（抖动灰阶）</option>
+  </select>
+</div>
+
+<div class="setting-row" style="margin-top:6px;">
+  <label>抖动强度：</label>
+  <input type="range" id="ditherRange" min="0" max="100" value="10" style="flex:1 1 200px; max-width:280px;">
+  <span id="ditherVal" style="font-family:monospace; width:44px; text-align:right;">10%</span>
+</div>
+
+<div class="setting-row" style="margin-top:6px;">
+  <label>色彩浓度：</label>
+  <input type="range" id="contrastRange" min="0" max="100" value="50" style="flex:1 1 200px; max-width:280px;">
+  <span id="contrastVal" style="font-family:monospace; width:44px; text-align:right;">50%</span>
+</div>
+
+<div class="preview-wrap" style="margin-top:10px; position:relative; touch-action:none; text-align:center;">
+  <canvas id="preview"
+          style="cursor:grab; max-width:100%; height:auto; border:1px dashed #ccc;
+                 background:#fff; display:block; margin:0 auto;
+                 touch-action:none; user-select:none; -webkit-user-select:none;
+                 -webkit-touch-callout:none;"></canvas>
+  <div style="font-size:11px;color:#aaa;margin-top:4px;">
+    手机：单指拖动 · 双指捏合缩放 ｜ 电脑：拖动 · 滚轮缩放
+  </div>
+</div>
+<br>
+<div id="progress"></div>
+<button id="upload">上传</button>
+
+<h3>图片库（内置） <span id="builtinCount" style="font-size:13px;color:#888;font-weight:normal;"></span></h3>
+<div class="thumb-pool-wrap collapsed" id="builtinWrap">
+  <div id="imgPoolBuiltin" class="thumb-pool">加载中...</div>
+</div>
+<button class="btn-expand" onclick="toggleExpand('builtinWrap', this)">展开全部</button>
+
+<h3>图片库（外挂） <span id="extCount" style="font-size:13px;color:#888;font-weight:normal;"></span></h3>
+<div class="thumb-pool-wrap collapsed" id="extWrap">
+  <div id="imgPoolExt" class="thumb-pool">检测中...</div>
+</div>
+<button class="btn-expand" onclick="toggleExpand('extWrap', this)">展开全部</button>
+
+<button id="extActivateBtn" style="display:none;">激活外挂</button>
+<button id="refreshImgs" style="margin-top:15px;">刷新</button>
+
+<script>
+window.toggleExpand = function(wrapId, btn) {
+  var wrap = document.getElementById(wrapId);
+  if (wrap.classList.contains('collapsed')) {
+    wrap.classList.remove('collapsed');
+    btn.textContent = '收起';
+  } else {
+    wrap.classList.add('collapsed');
+    btn.textContent = '展开全部';
+  }
+};
+
+(function(){
+  var canvas = document.getElementById('preview');
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+  var SCREEN = null;
+  var extReady = false;
+  var fmtKB = function(b) { return (b / 1024).toFixed(1) + ' KB'; };
+  var CHUNK = 16384;
+  var FRAME_BYTES = 192 * 552;
+
+  var _IMG_PAGE_SIZE = 12;
+  var _builtinAll = [];
+  var _extAll = [];
+  var _builtinPage = 0;
+  var _extPage = 0;
+
+  var _imageObj = null;
+  var _scale = 1;
+  var _offsetX = 0;
+  var _offsetY = 0;
+  var _rotation = 0;
+  var _isDragging = false;
+  var _lastX = 0;
+  var _lastY = 0;
+  var _renderTimer = null;
+
+  var _touchMode = null;
+  var _dragStartCX = 0, _dragStartCY = 0;
+  var _dragStartOffX = 0, _dragStartOffY = 0;
+  var _pinchStartDist = 0;
+  var _pinchStartScale = 1;
+  var _pinchStartMidX = 0, _pinchStartMidY = 0;
+  var _pinchStartOffX = 0, _pinchStartOffY = 0;
+
+  async function loadConfig() {
+    try {
+      var r = await fetch('/api/all');
+      var j = await r.json();
+      SCREEN = (j.config || {}).screen;
+      if (!SCREEN) { alert('屏幕配置缺失'); return; }
+      updateCanvasSize();
+      if (j.ext) {
+        extReady = true;
+        document.getElementById('extInfo').textContent = '外挂: 剩余 ' + fmtKB(j.ext.free) + ' / 总 ' + fmtKB(j.ext.total);
+        document.getElementById('extActivateBtn').style.display = 'none';
+      } else {
+        document.getElementById('extInfo').textContent = '外挂: 未激活';
+      }
+    } catch(e) { console.error('loadConfig:', e); }
+  }
+
+  function updateCanvasSize() {
+    if (!SCREEN) return;
+    var mode = document.getElementById('canvasMode').value;
+    if (mode === 'landscape') { canvas.width = SCREEN.width; canvas.height = SCREEN.height; }
+    else if (mode === 'portrait') { canvas.width = SCREEN.height; canvas.height = SCREEN.width; }
+  }
+
+  function getActivePalette() {
+    var mode = document.getElementById('colorMode').value;
+    if (mode === 'bw') {
+      var out = [];
+      for (var i = 0; i < SCREEN.palette.length; i++) {
+        var p = SCREEN.palette[i];
+        if (p.name === 'black' || p.name === 'white') out.push(p);
+      }
+      return out.length ? out : SCREEN.palette;
+    }
+    return SCREEN.palette;
+  }
+
+  function ditherFS(srcData, W, H, strength) {
+    var pal = getActivePalette();
+    var d = srcData.data;
+    var palRgb = [];
+    for (var k = 0; k < pal.length; k++) palRgb.push(pal[k].rgb);
+    var sliderVal = parseInt(document.getElementById('contrastRange').value);
+    var inkDepth = 0.5 + (sliderVal / 100) * 1.5;
+
+    function nearest(r, g, b) {
+      var best = 0, bestDist = 1e9;
+      for (var k = 0; k < pal.length; k++) {
+        var p = palRgb[k];
+        var dist = (r-p[0])*(r-p[0]) + (g-p[1])*(g-p[1]) + (b-p[2])*(b-p[2]);
+        if (p[0] === 255 && p[1] === 255 && p[2] === 255) {
+            dist = dist * (1.0 + (inkDepth - 1.0) * 0.8);
+        } else {
+            dist = dist * (1.0 - (inkDepth - 1.0) * 0.3);
+        }
+        if (dist < bestDist) { bestDist = dist; best = k; }
+      }
+      return best;
+    }
+
+    var codes = new Uint8Array(W * H);
+    for (var y = 0; y < H; y++) {
+      for (var x = 0; x < W; x++) {
+        var i = (y * W + x) * 4;
+        var r = d[i], g = d[i+1], b = d[i+2];
+        var k = nearest(r, g, b);
+        var pc = palRgb[k];
+        codes[y * W + x] = pal[k].code;
+        d[i] = pc[0]; d[i+1] = pc[1]; d[i+2] = pc[2];
+        var er = (r - pc[0]) * strength, eg = (g - pc[1]) * strength, eb = (b - pc[2]) * strength;
+        if (x + 1 < W) { var ii = i + 4; d[ii] += er*7/16; d[ii+1] += eg*7/16; d[ii+2] += eb*7/16; }
+        if (y + 1 < H) {
+          if (x - 1 >= 0) { var ii2 = i + (W - 1) * 4; d[ii2] += er*3/16; d[ii2+1] += eg*3/16; d[ii2+2] += eb*3/16; }
+          var ii3 = i + W * 4; d[ii3] += er*5/16; d[ii3+1] += eg*5/16; d[ii3+2] += eb*5/16;
+          if (x + 1 < W) { var ii4 = i + (W + 1) * 4; d[ii4] += er*1/16; d[ii4+1] += eg*1/16; d[ii4+2] += eb*1/16; }
+        }
+      }
+    }
+    return { imgData: srcData, codes: codes };
+  }
+
+  function packBitmap() {
+    if (!canvas._codes) return null;
+    var bpp = SCREEN.bits_per_pixel;
+    var msbFirst = SCREEN.byte_order === 'msb_first';
+    var finalW = SCREEN.width, finalH = SCREEN.height;
+    var bytesPerRow = Math.ceil(finalW * bpp / 8);
+    var buf = new Uint8Array(bytesPerRow * finalH);
+    var mask = (1 << bpp) - 1;
+    var isPortrait = (canvas.width < canvas.height);
+
+    if (!isPortrait) {
+        var codes = canvas._codes;
+        for (var y = 0; y < finalH; y++) {
+          for (var x = 0; x < finalW; x++) {
+            var code = codes[y * finalW + x] & mask;
+            var bitPos = x * bpp;
+            var byteIdx = y * bytesPerRow + (bitPos >> 3);
+            var bitOffset = bitPos & 7;
+            if (msbFirst) buf[byteIdx] |= (code << (8 - bpp - bitOffset));
+            else buf[byteIdx] |= (code << bitOffset);
+          }
+        }
+    } else {
+        var tempCanvas = document.createElement('canvas');
+        tempCanvas.width = finalW;
+        tempCanvas.height = finalH;
+        var tCtx = tempCanvas.getContext('2d');
+        tCtx.translate(finalW / 2, finalH / 2);
+        tCtx.rotate(90 * Math.PI / 180);
+        tCtx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+        var rotatedData = tCtx.getImageData(0, 0, finalW, finalH);
+        var res = ditherFS(rotatedData, finalW, finalH, parseInt(document.getElementById('ditherRange').value) / 100);
+        var codes2 = res.codes;
+        for (var y = 0; y < finalH; y++) {
+          for (var x = 0; x < finalW; x++) {
+            var code = codes2[y * finalW + x] & mask;
+            var bitPos = x * bpp;
+            var byteIdx = y * bytesPerRow + (bitPos >> 3);
+            var bitOffset = bitPos & 7;
+            if (msbFirst) buf[byteIdx] |= (code << (8 - bpp - bitOffset));
+            else buf[byteIdx] |= (code << bitOffset);
+          }
+        }
+    }
+    return buf;
+  }
+
+  function renderPreview() {
+    if (!_imageObj || !SCREEN) return;
+    if (_renderTimer) clearTimeout(_renderTimer);
+    _renderTimer = setTimeout(function() {
+        var W = canvas.width, H = canvas.height;
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+        ctx.save();
+        ctx.translate(W / 2 + _offsetX, H / 2 + _offsetY);
+        ctx.rotate(_rotation * Math.PI / 180);
+        var baseScale = Math.min(W / _imageObj.width, H / _imageObj.height);
+        var finalScale = baseScale * _scale;
+        ctx.scale(finalScale, finalScale);
+        ctx.drawImage(_imageObj, -_imageObj.width / 2, -_imageObj.height / 2);
+        ctx.restore();
+        var raw = ctx.getImageData(0, 0, W, H);
+        var strength = parseInt(document.getElementById('ditherRange').value) / 100;
+        var res = ditherFS(raw, W, H, strength);
+        ctx.putImageData(res.imgData, 0, 0);
+        canvas._codes = res.codes;
+        canvas._w = W;
+        canvas._h = H;
+    }, 30);
+  }
+
+  document.getElementById('file').addEventListener('change', function(e) {
+    var f = e.target.files[0];
+    if (!f || !SCREEN) return;
+    var img = new Image();
+    img.onload = function() {
+        _imageObj = img;
+        _scale = 1; _offsetX = 0; _offsetY = 0; _rotation = 0;
+        updateCanvasSize(); renderPreview(); URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(f);
+  });
+
+  document.getElementById('colorMode').addEventListener('change', renderPreview);
+  document.getElementById('canvasMode').addEventListener('change', function() { updateCanvasSize(); renderPreview(); });
+  document.getElementById('ditherRange').addEventListener('input', function() {
+    document.getElementById('ditherVal').textContent = this.value + '%'; renderPreview();
+  });
+  document.getElementById('contrastRange').addEventListener('input', function() {
+    document.getElementById('contrastVal').textContent = this.value + '%'; renderPreview();
+  });
+
+  document.getElementById('rotateBtn').addEventListener('click', function() {
+    _rotation = (_rotation + 90) % 360; renderPreview();
+  });
+  document.getElementById('resetBtn').addEventListener('click', function() {
+    _scale = 1; _offsetX = 0; _offsetY = 0; _rotation = 0; renderPreview();
+  });
+
+  canvas.addEventListener('wheel', function(e) {
+    e.preventDefault(); var delta = e.deltaY > 0 ? 0.9 : 1.1;
+    _scale *= delta; if (_scale < 0.1) _scale = 0.1; if (_scale > 10) _scale = 10;
+    renderPreview();
+  }, { passive: false });
+
+  canvas.addEventListener('mousedown', function(e) { _isDragging = true; _lastX = e.clientX; _lastY = e.clientY; canvas.style.cursor = 'grabbing'; });
+  window.addEventListener('mousemove', function(e) {
+    if (!_isDragging) return;
+    var rect = canvas.getBoundingClientRect();
+    _offsetX += (e.clientX - _lastX) * (canvas.width / rect.width);
+    _offsetY += (e.clientY - _lastY) * (canvas.height / rect.height);
+    _lastX = e.clientX; _lastY = e.clientY; renderPreview();
+  });
+  window.addEventListener('mouseup', function() { _isDragging = false; canvas.style.cursor = 'grab'; });
+
+  function _touchDist(t1, t2) { var dx = t2.clientX - t1.clientX, dy = t2.clientY - t1.clientY; return Math.sqrt(dx * dx + dy * dy); }
+  function _touchMidCanvas(t1, t2, rect) { var midX_css = (t1.clientX + t2.clientX) / 2 - rect.left; var midY_css = (t1.clientY + t2.clientY) / 2 - rect.top; return { x: midX_css * (canvas.width / rect.width), y: midY_css * (canvas.height / rect.height) }; }
+
+  canvas.addEventListener('touchstart', function(e) {
+    if (!_imageObj) return; e.preventDefault(); var rect = canvas.getBoundingClientRect();
+    if (e.touches.length === 1) { _touchMode = 'drag'; _dragStartCX = e.touches[0].clientX; _dragStartCY = e.touches[0].clientY; _dragStartOffX = _offsetX; _dragStartOffY = _offsetY; }
+    else if (e.touches.length === 2) { _touchMode = 'pinch'; _pinchStartDist = _touchDist(e.touches[0], e.touches[1]) || 1; _pinchStartScale = _scale; _pinchStartOffX = _offsetX; _pinchStartOffY = _offsetY; var mid = _touchMidCanvas(e.touches[0], e.touches[1], rect); _pinchStartMidX = mid.x; _pinchStartMidY = mid.y; }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', function(e) {
+    if (!_imageObj) return; e.preventDefault(); var rect = canvas.getBoundingClientRect();
+    if (_touchMode === 'drag' && e.touches.length === 1) {
+      var dx = e.touches[0].clientX - _dragStartCX; var dy = e.touches[0].clientY - _dragStartCY;
+      _offsetX = _dragStartOffX + dx * (canvas.width / rect.width); _offsetY = _dragStartOffY + dy * (canvas.height / rect.height); renderPreview();
+    } else if (_touchMode === 'pinch' && e.touches.length === 2) {
+      var dist = _touchDist(e.touches[0], e.touches[1]) || 1; var ratio = dist / _pinchStartDist; var newScale = _pinchStartScale * ratio;
+      if (newScale < 0.1) { newScale = 0.1; ratio = newScale / _pinchStartScale; }
+      if (newScale > 10)  { newScale = 10;  ratio = newScale / _pinchStartScale; }
+      var midNow = _touchMidCanvas(e.touches[0], e.touches[1], rect); var Cx = canvas.width / 2, Cy = canvas.height / 2;
+      _offsetX = midNow.x - Cx - ratio * (_pinchStartMidX - Cx - _pinchStartOffX);
+      _offsetY = midNow.y - Cy - ratio * (_pinchStartMidY - Cy - _pinchStartOffY);
+      _scale = newScale; renderPreview();
+    } else if (e.touches.length === 2 && _touchMode !== 'pinch') {
+      _touchMode = 'pinch'; _pinchStartDist = _touchDist(e.touches[0], e.touches[1]) || 1; _pinchStartScale = _scale; _pinchStartOffX = _offsetX; _pinchStartOffY = _offsetY;
+      var mid2 = _touchMidCanvas(e.touches[0], e.touches[1], rect); _pinchStartMidX = mid2.x; _pinchStartMidY = mid2.y;
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', function(e) {
+    if (e.touches.length === 0) { _touchMode = null; }
+    else if (e.touches.length === 1) { _touchMode = 'drag'; _dragStartCX = e.touches[0].clientX; _dragStartCY = e.touches[0].clientY; _dragStartOffX = _offsetX; _dragStartOffY = _offsetY; }
+  }, { passive: false });
+  canvas.addEventListener('touchcancel', function() { _touchMode = null; }, { passive: false });
+
+  function utf8ByteLen(s) { var n = 0; for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); if (c < 0x80) n += 1; else if (c < 0x800) n += 2; else if (c >= 0xD800 && c < 0xDC00) { n += 4; i++; } else n += 3; } return n; }
+  function sanitizeName(raw) { return String(raw).replace(/[\/\\:*?"<>|\x00-\x1f]/g, '').trim(); }
+  function buildImageName(customName, isExt, ts) {
+    var base = sanitizeName(customName || '');
+    if (base) { var dot = base.lastIndexOf('.'); if (dot > 0 && (base.length - dot) <= 6) base = base.slice(0, dot); }
+    if (!base) return isExt ? ('ext/e' + (ts % 100000000) + '.bin') : ('img/img_' + ts + '.bin');
+    if (isExt) { while (utf8ByteLen(base) > 28) base = base.slice(0, -1); if (!base) base = 'e' + (ts % 100000000); return 'ext/' + base + '.bin'; }
+    else { if (base.length > 64) base = base.slice(0, 64); return 'img/' + base + '.bin'; }
+  }
+  function updateNameHint() { var hint = document.getElementById('nameHint'); if (!hint) return; var v = document.getElementById('customName').value.trim(); if (!v) { hint.textContent = ''; return; } var b = utf8ByteLen(v); hint.textContent = '字节数: ' + b; hint.style.color = '#888'; }
+  document.getElementById('customName').addEventListener('input', updateNameHint);
+
+  document.getElementById('upload').addEventListener('click', async function() {
+    if (!canvas._codes) { alert('请先选择图片'); return; }
+    var dest = document.querySelector('input[name=dest]:checked').value;
+    var isExt = (dest === 'ext');
+    if (isExt && !extReady) { var ok = await activateExt(); if (!ok) { alert('外挂不可用'); return; } }
+    var prog = document.getElementById('progress');
+    var bitmap = packBitmap();
+    if(!bitmap) { alert('生成数据失败'); return; }
+    var total = bitmap.byteLength;
+    if (total !== FRAME_BYTES) { if (!confirm('位图大小 ' + total + ' 字节 ≠ 期望 ' + FRAME_BYTES + ' 字节，可能刷不出来。仍要继续上传吗？')) return; }
+
+    var ts = Date.now();
+    var fname = buildImageName(document.getElementById('customName').value, isExt, ts);
+    prog.textContent = '总 ' + fmtKB(total) + '，上传 ' + fname + ' ...';
+
+    var r = await fetch('/api/upload/start', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name: fname, size: total }) });
+
+    if (!r.ok) {
+        // server.py 的 upload_start 会在下次调用时自动清理旧锁，无需手动 cancel
+        var errTxt = '开始失败 HTTP ' + r.status;
+        try {
+            var ej = await r.json();
+            if (ej && ej.err) errTxt = ej.err;
+        } catch(e) {}
+        alert('开始失败: ' + errTxt + '\n（如果刚才有中断的上传，请稍等几秒后重试即可）');
+        return;
+    }
+
+    for (var off = 0; off < total; off += CHUNK) {
+      var chunk = bitmap.slice(off, off + CHUNK);
+      r = await fetch('/api/upload/chunk', { method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: chunk });
+      if (!r.ok) { alert('中断 HTTP ' + r.status); return; }
+      prog.textContent = '已传 ' + fmtKB(Math.min(off+CHUNK, total)) + '/' + fmtKB(total);
+    }
+    await fetch('/api/upload/end', { method: 'POST' });
+    prog.textContent = '✅ 完成：' + fname;
+    alert('上传成功：' + fname);
+    canvas._codes = null; _imageObj = null; document.getElementById('file').value = ''; loadImages();
+  });
+
+  async function drawThumb(cvs, path, w) {
+    try { var big = await window.__decodeBitmap(path, w); cvs.width = big.width; cvs.height = big.height; cvs.getContext('2d').drawImage(big, 0, 0); } catch(e) {}
+  }
+
+  function makeThumbItem(path, isExt) {
+    var wrap = document.createElement('div'); wrap.className = 'thumb-item' + (isExt ? ' ext' : '');
+    var cvs = document.createElement('canvas'); cvs.className = 'thumb-canvas'; wrap.appendChild(cvs); drawThumb(cvs, path, 192);
+    var lbl = document.createElement('div'); lbl.className = 'thumb-label'; lbl.textContent = path.split('/').pop(); wrap.appendChild(lbl);
+
+    var btnPlay = document.createElement('button');
+    btnPlay.className = 'thumb-dl btn-play';
+    btnPlay.textContent = '⚡';
+
+    btnPlay.addEventListener('click', async function(e) {
+      e.preventDefault(); e.stopPropagation(); btnPlay.textContent = '...';
+      try { var rr = await fetch('/api/epaper/display_now', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ path: path }) }); var jj = await rr.json(); btnPlay.textContent = jj.ok ? '✅' : '❌'; setTimeout(function(){ btnPlay.textContent = '⚡'; }, 3000); } catch(e) { btnPlay.textContent = '⚡'; }
+    });
+    wrap.appendChild(btnPlay);
+    wrap.addEventListener('click', function() { if (window.__showBigImage) window.__showBigImage(path); });
+    return wrap;
+  }
+
+  function renderBuiltinChunk() {
+    var poolB = document.getElementById('imgPoolBuiltin'); var start = _builtinPage * _IMG_PAGE_SIZE, end = start + _IMG_PAGE_SIZE; var subset = _builtinAll.slice(start, end); poolB.innerHTML = '';
+    if (subset.length === 0) { poolB.textContent = '（暂无）'; return; } subset.forEach(function(it) { poolB.appendChild(makeThumbItem('img/' + it.name, false)); });
+  }
+
+  function renderExtChunk() {
+    var poolE = document.getElementById('imgPoolExt'); if (!poolE) return; var start = _extPage * _IMG_PAGE_SIZE, end = start + _IMG_PAGE_SIZE; var subset = _extAll.slice(start, end); poolE.innerHTML = '';
+    if (subset.length === 0) { poolE.textContent = '（暂无）'; return; } subset.forEach(function(it) { poolE.appendChild(makeThumbItem('ext/' + it.name, true)); });
+  }
+
+  async function activateExt() {
+    if (extReady) return true;
+    try {
+      var r = await fetch('/api/ext/init', { method: 'POST' });
+      if (!r.ok) return false;
+      var j = await r.json();
+      extReady = true;
+      document.getElementById('extInfo').textContent = '外挂: 剩余 ' + fmtKB(j.free) + ' / 总 ' + fmtKB(j.total);
+      document.getElementById('extActivateBtn').style.display = 'none';
+      return true;
+    } catch(e) { return false; }
+  }
+
+  async function loadImages() {
+    var poolB = document.getElementById('imgPoolBuiltin'); var poolE = document.getElementById('imgPoolExt'); poolB.textContent = '加载中...';
+    try {
+      var r = await fetch('/api/files/refresh', { method: 'POST' }); var j = await r.json(); var files = j.files || {};
+
+      // 播放列表只允许 .bin 格式
+      _builtinAll = (files['/img'] || []).filter(function(x){ return x.size > 0 && x.name.toLowerCase().endsWith('.bin'); });
+      _builtinPage = 0;
+      renderBuiltinChunk();
+
+      if (j.ext) {
+          extReady = true;
+          document.getElementById('extInfo').textContent = '外挂: 剩余 ' + fmtKB(j.ext.free) + ' / 总 ' + fmtKB(j.ext.total);
+          document.getElementById('extActivateBtn').style.display = 'none';
+
+          _extAll = (files['/ext'] || []).filter(function(x){ return x.size > 0 && x.name.toLowerCase().endsWith('.bin'); });
+          _extPage = 0;
+          renderExtChunk();
+      } else if (extReady) {
+          if (poolE) poolE.textContent = '（暂无）';
+      } else {
+          if (poolE) poolE.textContent = '（未接入硬件）';
+          document.getElementById('extActivateBtn').style.display = 'inline-block';
+      }
+    } catch(e) { poolB.textContent = '加载失败，请刷新'; }
+  }
+
+  document.getElementById('refreshImgs').addEventListener('click', loadImages);
+  document.getElementById('extActivateBtn').addEventListener('click', async function() { await activateExt(); loadImages(); });
+  loadConfig().then(loadImages);
+})();
+</script>

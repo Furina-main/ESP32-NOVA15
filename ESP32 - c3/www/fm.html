@@ -1,0 +1,103 @@
+<div x-data="fmUploader()" x-cloak>
+  <h3>文件管理</h3>
+
+  <div class="fm-tool">
+    <button hx-get="/frag/fm" hx-target="#fmList" hx-swap="innerHTML">🔄 刷新列表</button>
+    <span style="font-size:12px;color:#888;margin-left:8px;">
+      删除操作即时生效
+    </span>
+  </div>
+
+  <div id="fmList"
+       hx-get="/frag/fm"
+       hx-trigger="load, htmx:refresh"
+       hx-swap="innerHTML">
+    <div class="placeholder" style="padding:12px;">加载中...</div>
+  </div>
+
+  <hr style="border:none;border-top:1px solid rgba(0,0,0,0.1);margin:16px 0;">
+
+  <h4>📤 上传文件</h4>
+  <div class="fm-tool">
+    <div class="upload-row">
+      <label>存到</label>
+      <select x-model="dir" style="flex:1 1 200px;padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px;">
+        <option value="res">/res（内置资源）</option>
+        <option value="img">/img（内置图片）</option>
+        <option value="ext">/ext（外挂）</option>
+      </select>
+      <input type="file" x-ref="file">
+      <button @click="upload()" :disabled="busy" x-text="busy ? '上传中...' : '上传'">上传</button>
+    </div>
+    <div x-show="msg" x-text="msg"
+         style="font-size:12px;color:#0070c0;margin-top:6px;"></div>
+  </div>
+</div>
+
+<script>
+function fmUploader() {
+  return {
+    dir: 'res',
+    busy: false,
+    msg: '',
+    CHUNK: 8192,
+
+    async upload() {
+      var f = this.$refs.file.files[0];
+      if (!f) { alert('请选择文件'); return; }
+
+      var name = f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      var path = (this.dir === 'ext') ? ('ext/' + name) : (this.dir + '/' + name);
+      var buf = new Uint8Array(await f.arrayBuffer());
+
+      this.busy = true;
+      this.msg = '上传 ' + path + ' (' + (buf.length / 1024).toFixed(1) + ' KB)...';
+
+      var r;
+      try {
+        r = await fetch('/api/upload/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: path, size: buf.length })
+        });
+      } catch (e) {
+        this.msg = '❌ 开始失败: ' + e; this.busy = false; return;
+      }
+      if (!r.ok) {
+        this.msg = '❌ 开始失败 HTTP ' + r.status;
+        this.busy = false;
+        return;
+      }
+
+      for (var off = 0; off < buf.length; off += this.CHUNK) {
+        var chunk = buf.slice(off, off + this.CHUNK);
+        try {
+          r = await fetch('/api/upload/chunk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: chunk
+          });
+        } catch (e) {
+          this.msg = '❌ 中断: ' + e; this.busy = false; return;
+        }
+        if (!r.ok) {
+          this.msg = '❌ 中断 HTTP ' + r.status;
+          this.busy = false;
+          return;
+        }
+        this.msg = '已传 ' + Math.min(off + this.CHUNK, buf.length) +
+                   ' / ' + buf.length + ' B';
+      }
+
+      await fetch('/api/upload/end', { method: 'POST' });
+      this.msg = '✅ 完成，正在刷新列表...';
+      this.busy = false;
+      this.$refs.file.value = '';
+
+      if (window.htmx) {
+        window.htmx.trigger('#fmList', 'htmx:refresh');
+      }
+    }
+  };
+}
+</script>

@@ -1,0 +1,272 @@
+* { box-sizing: border-box; }
+
+#bg-layer {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -10;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  /* 🆕 彻底移除 background-attachment: fixed，防止手机端视口崩塌 */
+  transition: background-image 0.4s ease, filter 0.3s ease;
+  pointer-events: none; /* 防止背景遮挡页面交互 */
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: 16px;
+  margin: 0;
+  color: #1d1d1f;
+  background-color: #f0f4f8;
+}
+
+h2 { color: #111; margin: 8px 0; font-weight: 600; letter-spacing: -0.5px; }
+h3 { color: #333; margin: 16px 0 8px 0; font-size: 16px; font-weight: 600; }
+h4 { color: #333; margin: 12px 0 6px 0; font-weight: 600; }
+
+#status { 
+  margin: 8px 0 16px 0; font-size: 13px; color: #666; 
+  background: rgba(255, 255, 255, 0.7);
+  display: inline-block; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid rgba(0,0,0,0.05); backdrop-filter: blur(10px);
+}
+
+button { 
+  padding: 8px 16px; font-size: 14px; font-weight: 500; margin: 6px 6px 6px 0;
+  border: 1px solid #d1d1d6; border-radius: 6px; background: #ffffff; color: #333;
+  cursor: pointer; transition: all 0.2s;
+}
+button:hover { background: #f2f2f7; border-color: #c7c7cc; }
+button.active { background: #007aff; color: #fff; border-color: #007aff; }
+button.btn-success { background: #34c759; color: #fff; border-color: #34c759; }
+button.btn-success:hover { background: #28a745; border-color: #28a745; }
+button.btn-danger { background: #ff3b30; color: #fff; border-color: #ff3b30; }
+button.btn-danger:hover { background: #d92c23; border-color: #d92c23; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.card, #panel, .fm-tool, .modal-body {
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 12px; padding: 16px; margin: 16px 0;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.04);
+}
+
+.placeholder { color: #888; font-size: 14px; }
+canvas { border: 1px solid #e5e5ea; max-width: 100%; border-radius: 6px; background: #fff; }
+
+.setting-row { margin: 12px 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.setting-row input, .setting-row select {
+  padding: 8px 12px; border: 1px solid #d1d1d6; border-radius: 6px; font-size: 14px;
+  background: #fff; outline: none; transition: border 0.2s;
+}
+.setting-row input:focus, .setting-row select:focus { border-color: #007aff; }
+
+/* 深色模式适配 */
+body.theme-dark { color: #f5f5f7; background-color: #000; }
+body.theme-dark h2, body.theme-dark h3, body.theme-dark h4 { color: #fff; }
+body.theme-dark .card, body.theme-dark #panel, body.theme-dark .fm-tool, body.theme-dark .modal-body { 
+  background: rgba(28,28,30,0.7) !important; border-color: rgba(255,255,255,0.1) !important;
+}
+body.theme-dark .setting-row input, body.theme-dark .setting-row select, body.theme-dark .fm-tool input[type=text] {
+  background: #1c1c1e; color: #fff; border-color: #333;
+}
+body.theme-dark .fm-item, body.theme-dark .thumb-item, body.theme-dark .pl-item {
+  background: #1c1c1e !important; border-color: #333;
+}
+body.theme-dark .fm-item .name, body.theme-dark .pl-name { color: #fff; }
+body.theme-dark #status { background: rgba(28,28,30,0.8); color: #f5f5f7; border-color: #333; }
+body.theme-dark button { background: #1c1c1e; color: #0a84ff; border-color: #333; }
+body.theme-dark button:hover { background: #2c2c2e; }
+body.theme-dark .btn-expand { background: #1c1c1e; border-color: #333; }
+
+/* htmx + Alpine 兼容 */
+[x-cloak] { display: none !important; }
+
+.modal-mask {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-mask > .modal-body {
+  max-width: 92vw;
+  max-height: 92vh;
+  overflow: auto;
+  margin: 0;
+}
+.modal-close {
+  position: absolute;
+  top: 6px; right: 12px;
+  background: none;
+  border: none;
+  font-size: 26px;
+  line-height: 1;
+  color: #666;
+  cursor: pointer;
+  padding: 0;
+}
+.modal-close:hover { color: #c62828; }
+
+/* 文件管理片段行 */
+.fm-row { transition: background-color 0.2s; }
+.fm-row:hover { background-color: rgba(0, 122, 255, 0.04); }
+.fm-row.htmx-swapping { opacity: 0; transition: opacity 0.2s; }
+
+#playlistBox {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+@media (max-width: 600px) {
+  #playlistBox {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+}
+
+.pl-item {
+  position: relative;
+  background: #fff;
+  border: 1px solid #e5e5ea;
+  border-radius: 10px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+}
+.pl-item:hover { border-color: #007aff; box-shadow: 0 4px 12px rgba(0,122,255,0.1); }
+.pl-item.ext { background: #f4fcf6; border-color: #c3e6cb; }
+
+.pl-num {
+  position: absolute;
+  top: 4px; left: 4px;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 10px;
+  font-weight: bold;
+  padding: 1px 5px;
+  border-radius: 4px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.pl-canvas {
+  width: 100%;
+  height: 80px;
+  object-fit: contain;
+  background: #f9f9f9;
+  border-radius: 6px;
+  cursor: pointer;
+}
+@media (max-width: 600px) {
+  .pl-canvas { height: 70px; }
+}
+
+.pl-info { margin-top: 6px; text-align: center; overflow: hidden; }
+.pl-name { font-size: 11px; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-src { font-size: 9px; color: #888; margin-top: 2px; }
+
+.pl-btns { display: flex; justify-content: space-between; gap: 2px; margin-top: 6px; }
+.pl-rm {
+  flex: 1; padding: 2px 0; margin: 0; font-size: 12px;
+  border: 1px solid #d1d1d6; background: #f2f2f7;
+  border-radius: 4px; cursor: pointer; color: #333;
+}
+.pl-rm:hover { background: #e5e5ea; }
+.pl-rm:disabled { opacity: 0.3; cursor: not-allowed; }
+.pl-rm.btn-del { background: #ffebee; color: #c62828; border-color: #ffcdd2; }
+.pl-rm.btn-del:hover { background: #ffcdd2; }
+
+/* 2. 图库网格自适应 */
+.thumb-pool {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+@media (max-width: 600px) {
+  .thumb-pool {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+}
+
+.thumb-item {
+  position: relative;
+  padding: 6px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e5e5ea;
+  cursor: pointer;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  display: flex;
+  flex-direction: column;
+}
+.thumb-item.ext { background: #f4fcf6; border-color: #c3e6cb; }
+
+.thumb-canvas {
+  width: 100%;
+  height: 110px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #f9f9f9;
+  display: block;
+}
+@media (max-width: 600px) {
+  .thumb-canvas { height: 90px; }
+}
+
+.thumb-label {
+  font-size: 11px; color: #555; margin-top: 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 3. 悬浮磨砂小圆标按钮 */
+.thumb-dl {
+  position: absolute !important;
+  top: 6px !important;
+  right: 6px !important;
+  left: auto !important;
+  width: 28px !important;
+  height: 28px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 14px !important;
+  line-height: 28px !important;
+  text-align: center !important;
+  border: none !important;
+  border-radius: 50% !important;
+  color: #fff !important;
+  cursor: pointer !important;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15) !important;
+  transition: all 0.2s !important;
+  z-index: 5 !important;
+  display: block !important;
+}
+
+/* 上屏按钮：磨砂黑 */
+.thumb-dl.btn-play {
+  background: rgba(0, 0, 0, 0.5) !important;
+  backdrop-filter: blur(4px);
+}
+.thumb-dl.btn-play:hover {
+  background: rgba(0, 122, 255, 0.9) !important;
+  transform: scale(1.1);
+}
+
+/* 添加按钮：绿色 */
+.thumb-dl.btn-add {
+  background: rgba(52, 199, 89, 0.85) !important;
+}
+.thumb-dl.btn-add:hover {
+  background: rgba(52, 199, 89, 1) !important;
+  transform: scale(1.1);
+}

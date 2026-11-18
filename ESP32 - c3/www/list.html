@@ -1,0 +1,399 @@
+<h3>播放列表</h3>
+<div style="font-size:13px;color:#666;margin:8px 0;">
+  间隔和模式在主页「⚙ 系统配置」里调整。点击图库上的 ➕ 加入，点击列表上的 × 移除。
+</div>
+
+<div>当前播放列表：</div>
+<div id="playlistBox"></div>
+
+<div style="margin-top:16px; display:flex; align-items:center; gap: 10px; flex-wrap: wrap;">
+  <span>内置图库：</span>
+  <label style="font-size:13px; color:#0070c0; cursor:pointer; background:#e3f2fd; padding:4px 8px; border-radius:4px;">
+    <input type="checkbox" id="hideAdded" checked> 隐藏已加入列表的图片
+  </label>
+</div>
+<div class="thumb-pool-wrap collapsed" id="listBuiltinWrap">
+  <div id="listPoolBuiltin" class="thumb-pool">加载中...</div>
+</div>
+<button class="btn-expand" onclick="toggleExpand('listBuiltinWrap', this)">展开全部</button>
+
+<div style="margin-top:12px">外挂图库：</div>
+<div class="thumb-pool-wrap collapsed" id="listExtWrap">
+  <div id="listPoolExt" class="thumb-pool">加载中...</div>
+</div>
+<button class="btn-expand" onclick="toggleExpand('listExtWrap', this)">展开全部</button>
+
+<button id="refreshList" style="margin-top:15px;">🔄 刷新图库</button>
+<button id="clearPlaylist">清空</button>
+
+<script>
+window.toggleExpand = function(wrapId, btn) {
+  var wrap = document.getElementById(wrapId);
+  if (wrap.classList.contains('collapsed')) {
+    wrap.classList.remove('collapsed');
+    btn.textContent = '收起';
+  } else {
+    wrap.classList.add('collapsed');
+    btn.textContent = '展开全部';
+  }
+};
+
+(function(){
+  var playlist = { order: [], interval: 3600, mode: 'fixed' };
+  var _saveTimer = null;
+  var _pageSize = 12;
+  var _builtinPage = 0;
+  var _extPage = 0;
+  var _builtinAll = [];
+  var _extAll = [];
+
+  function scheduleSave() {
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(function() {
+      fetch('/api/playlist', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ order: playlist.order })
+      }).catch(function(e) { console.error('自动保存失败:', e); });
+    }, 400);
+  }
+
+  async function drawThumb(canvas, path, w) {
+    try {
+      var big = await window.__decodeBitmap(path, w);
+      canvas.width = big.width;
+      canvas.height = big.height;
+      canvas.getContext('2d').drawImage(big, 0, 0);
+    } catch(e) {
+      canvas.width = w;
+      canvas.height = Math.round(w * 552 / 768);
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#eee';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#999';
+      ctx.font = '10px sans-serif';
+      ctx.fillText('×', 6, 14);
+    }
+  }
+
+  function renderLoadMore(target, total, page, label, loadFn) {
+    var btn = document.getElementById(target + 'More');
+    var wrap = document.getElementById(target);
+    if (!wrap) return;
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = target + 'More';
+      btn.style.marginTop = '8px';
+      btn.type = 'button';
+      btn.textContent = '加载更多';
+      btn.addEventListener('click', function() { loadFn(); });
+      wrap.parentNode.insertBefore(btn, wrap.nextSibling);
+    }
+    btn.style.display = total > page * _pageSize ? 'inline-block' : 'none';
+    btn.textContent = label;
+  }
+
+  function renderPoolChunk(poolEl, items, kind) {
+    var list = items || [];
+    poolEl.innerHTML = '';
+    if (list.length === 0) {
+      poolEl.textContent = '（暂无图片）';
+      return;
+    }
+    list.forEach(function(it) {
+      poolEl.appendChild(makePoolItem(kind + '/' + it.name, kind === 'ext'));
+    });
+  }
+
+  function loadBuiltinChunk() {
+    var poolB = document.getElementById('listPoolBuiltin');
+    var hide = document.getElementById('hideAdded').checked;
+    var list = _builtinAll;
+    
+    if (hide) {
+      list = list.filter(function(it) {
+        return playlist.order.indexOf('img/' + it.name) === -1;
+      });
+    }
+    
+    var start = _builtinPage * _pageSize;
+    var end = start + _pageSize;
+    var items = list.slice(start, end);
+    
+    renderPoolChunk(poolB, items, 'img');
+    
+    renderLoadMore('listPoolBuiltin', list.length, _builtinPage + 1, '加载更多', function() {
+      _builtinPage += 1;
+      loadBuiltinChunk();
+    });
+  }
+
+  function loadExtChunk() {
+    var poolE = document.getElementById('listPoolExt');
+    var hide = document.getElementById('hideAdded').checked;
+    var list = _extAll;
+    
+    if (hide) {
+      list = list.filter(function(it) {
+        return playlist.order.indexOf('ext/' + it.name) === -1;
+      });
+    }
+    
+    var start = _extPage * _pageSize;
+    var end = start + _pageSize;
+    var items = list.slice(start, end);
+    
+    renderPoolChunk(poolE, items, 'ext');
+    
+    renderLoadMore('listPoolExt', list.length, _extPage + 1, '加载更多', function() {
+      _extPage += 1;
+      loadExtChunk();
+    });
+  }
+
+  async function loadData() {
+    var poolB = document.getElementById('listPoolBuiltin');
+    var poolE = document.getElementById('listPoolExt');
+    poolB.textContent = '加载中...';
+    poolE.textContent = '加载中...';
+    try {
+      var r = await fetch('/api/files/refresh', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+      });
+      var j0 = await r.json();
+      var files = j0.files || {};
+
+      var pr = await fetch('/api/playlist');
+      playlist = await pr.json();
+
+      renderPlaylist();
+
+      // 🆕 核心修复：播放列表只允许 .bin 格式，过滤掉 jpg / png 等背景图
+      _builtinAll = (files['/img'] || []).filter(function(x){ 
+          return x.size > 0 && x.name.toLowerCase().endsWith('.bin'); 
+      });
+      _extAll = (files['/ext'] || []).filter(function(x){ 
+          return x.size > 0 && x.name.toLowerCase().endsWith('.bin'); 
+      });
+      
+      _builtinPage = 0;
+      _extPage = 0;
+      loadBuiltinChunk();
+      loadExtChunk();
+    } catch(e) {
+      console.error('loadData:', e);
+      if (poolB) poolB.textContent = '失败: ' + e;
+      if (poolE) poolE.textContent = '失败: ' + e;
+    }
+  }
+
+  function makePoolItem(path, isExt) {
+    var wrap = document.createElement('div');
+    wrap.className = 'thumb-item' + (isExt ? ' ext' : '');
+    wrap.draggable = true;
+    wrap.title = path;
+
+    var cvs = document.createElement('canvas');
+    cvs.className = 'thumb-canvas';
+    wrap.appendChild(cvs);
+    drawThumb(cvs, path, 192);
+
+    var lbl = document.createElement('div');
+    lbl.className = 'thumb-label';
+    lbl.textContent = path.split('/').pop();
+    wrap.appendChild(lbl);
+
+    var isAdded = playlist.order.indexOf(path) !== -1;
+    var btnAdd = document.createElement('button');
+    
+    if (isAdded) {
+      btnAdd.className = 'thumb-dl btn-add';
+      btnAdd.style.background = 'rgba(150, 150, 150, 0.85)';
+      btnAdd.textContent = '✅';
+      btnAdd.title = '已在播放列表中';
+      btnAdd.disabled = true;
+    } else {
+      btnAdd.className = 'thumb-dl btn-add';
+      btnAdd.textContent = '➕';
+      btnAdd.title = '加入播放列表';
+      btnAdd.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        addToPlaylist(path);
+      });
+    }
+    wrap.appendChild(btnAdd);
+
+    wrap.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (window.__showBigImage) window.__showBigImage(path);
+    });
+
+    wrap.addEventListener('dragstart', function(e) {
+      e.dataTransfer.setData('text/img-path', path);
+    });
+
+    return wrap;
+  }
+
+  function addToPlaylist(path) {
+    if (playlist.order.indexOf(path) === -1) {
+      playlist.order.push(path);
+      renderPlaylist();
+      scheduleSave();
+      loadBuiltinChunk();
+      loadExtChunk();
+    } else {
+      alert('该图片已经在播放列表中');
+    }
+  }
+
+  function renderPlaylist() {
+    var box = document.getElementById('playlistBox');
+    box.innerHTML = '';
+    if (playlist.order.length === 0) {
+      box.innerHTML = '<div style="color:#999;font-size:13px;padding:12px;grid-column:1/-1;">' +
+                      '点击下方图库上的 ➕ 加入，或直接拖拽图片到这里</div>';
+      return;
+    }
+    playlist.order.forEach(function(path, i) {
+      var isExt = path.indexOf('ext/') === 0;
+      var wrap = document.createElement('div');
+      wrap.className = 'pl-item' + (isExt ? ' ext' : '');
+      wrap.draggable = true;
+      wrap.dataset.index = i;
+
+      var num = document.createElement('div');
+      num.className = 'pl-num';
+      num.textContent = (i + 1);
+      wrap.appendChild(num);
+
+      var cvs = document.createElement('canvas');
+      cvs.className = 'pl-canvas';
+      wrap.appendChild(cvs);
+      drawThumb(cvs, path, 192);
+
+      var info = document.createElement('div');
+      info.className = 'pl-info';
+      var nm = document.createElement('div');
+      nm.className = 'pl-name';
+      nm.textContent = path.split('/').pop();
+      info.appendChild(nm);
+      var src = document.createElement('div');
+      src.className = 'pl-src';
+      src.textContent = isExt ? '💾 外挂' : '📷 内置';
+      info.appendChild(src);
+      wrap.appendChild(info);
+
+      var btns = document.createElement('div');
+      btns.className = 'pl-btns';
+
+      var btnUp = document.createElement('button');
+      btnUp.className = 'pl-rm btn-up';
+      btnUp.textContent = '↑';
+      btnUp.disabled = (i === 0);
+      btnUp.addEventListener('click', function(e) {
+        e.preventDefault(); e.stopPropagation();
+        if (i > 0) {
+          var tmp = playlist.order[i - 1];
+          playlist.order[i - 1] = playlist.order[i];
+          playlist.order[i] = tmp;
+          renderPlaylist();
+          scheduleSave();
+        }
+      });
+      btns.appendChild(btnUp);
+
+      var btnDown = document.createElement('button');
+      btnDown.className = 'pl-rm btn-down';
+      btnDown.textContent = '↓';
+      btnDown.disabled = (i === playlist.order.length - 1);
+      btnDown.addEventListener('click', function(e) {
+        e.preventDefault(); e.stopPropagation();
+        if (i < playlist.order.length - 1) {
+          var tmp = playlist.order[i + 1];
+          playlist.order[i + 1] = playlist.order[i];
+          playlist.order[i] = tmp;
+          renderPlaylist();
+          scheduleSave();
+        }
+      });
+      btns.appendChild(btnDown);
+
+      var rm = document.createElement('button');
+      rm.className = 'pl-rm btn-del';
+      rm.textContent = '×';
+      rm.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        playlist.order.splice(i, 1);
+        renderPlaylist();
+        scheduleSave();
+        loadBuiltinChunk();
+        loadExtChunk();
+      });
+      btns.appendChild(rm);
+      
+      wrap.appendChild(btns);
+
+      cvs.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (window.__showBigImage) window.__showBigImage(path);
+      });
+
+      wrap.addEventListener('dragstart', function(e) {
+        e.dataTransfer.setData('text/pl-index', String(i));
+      });
+      wrap.addEventListener('dragover', function(e) { e.preventDefault(); });
+      wrap.addEventListener('drop', function(e) {
+        e.preventDefault();
+        var from = parseInt(e.dataTransfer.getData('text/pl-index'));
+        if (isNaN(from) || from === i) return;
+        var moved = playlist.order.splice(from, 1)[0];
+        var to = (from < i) ? (i - 1) : i;
+        playlist.order.splice(to, 0, moved);
+        renderPlaylist();
+        scheduleSave();
+      });
+
+      box.appendChild(wrap);
+    });
+  }
+
+  (function() {
+    var plBox = document.getElementById('playlistBox');
+    plBox.addEventListener('dragover', function(e) { e.preventDefault(); });
+    plBox.addEventListener('drop', function(e) {
+      e.preventDefault();
+      var path = e.dataTransfer.getData('text/img-path');
+      if (path) addToPlaylist(path);
+    });
+  })();
+
+  document.getElementById('hideAdded').addEventListener('change', function() {
+    _builtinPage = 0;
+    _extPage = 0;
+    loadBuiltinChunk();
+    loadExtChunk();
+  });
+
+  document.getElementById('refreshList').addEventListener('click', function() {
+    loadData();
+  });
+
+  document.getElementById('clearPlaylist').addEventListener('click', function(e) {
+    e.preventDefault();
+    if (!confirm('清空播放列表？')) return;
+    playlist.order = [];
+    renderPlaylist();
+    scheduleSave();
+    loadBuiltinChunk();
+    loadExtChunk();
+  });
+
+  loadData();
+})();
+</script>

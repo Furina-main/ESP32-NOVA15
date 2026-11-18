@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "hardware.spi_baud: SPI 时钟频率，4 色屏建议 4M~20M，实测最稳值",
+    "ext_cs: 外挂 flash 的 CS 引脚（与屏幕共享 SPI 总线）",
+    "ext_size_mb: 外挂 flash 容量（MB）"
+  ],
+  "name": "ESP32-C3-Badge",
+  "screen": {
+    "name": "GDEY042Z98",
+    "width": 768,
+    "height": 552,
+    "color_count": 4,
+    "bits_per_pixel": 2,
+    "byte_order": "msb_first",
+    "palette": [
+      {"name": "black",  "code": 0, "rgb": [0, 0, 0]},
+      {"name": "white",  "code": 1, "rgb": [255, 255, 255]},
+      {"name": "yellow", "code": 2, "rgb": [255, 255, 0]},
+      {"name": "red",    "code": 3, "rgb": [255, 0, 0]}
+    ]
+  },
+  "hardware": {
+    "led_pin": 8,
+    "led_active_low": true,
+    "wake_pin": 9,
+    "wake_pull": "up",
+    "spi_bus": 1,
+    "spi_sck": 4,
+    "spi_mosi": 6,
+    "spi_miso": 5,
+    "spi_baud": 10000000,
+    "epd_cs": 10,
+    "epd_dc": 3,
+    "epd_rst": 20,
+    "epd_busy": 21,
+    "ext_cs": 7,
+    "ext_size_mb": 8,
+    "long_press_ms": 3000,
+    "wifi_duration": 300,
+    "ap_ssid": "芙宁娜的徽章",
+    "ap_password": "",
+    "space_reserve_kb": 64,
+    "deep_sleep": "OFF"
+  }
+}
