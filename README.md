@@ -16,4 +16,8 @@ GPIO 20 (IO20)	  墨水屏	RST / RES	        屏幕复位引脚
 GPIO 21 (IO21)	  墨水屏	BUSY	            屏幕忙状态检测（输入）
 GPIO 7 (IO7)	    外挂 SPI Flash	CS / CSB	Flash 片选（低电平有效）
 
+<img width="918" height="730" alt="屏幕截图 2026-11-18 192017" src="https://github.com/user-attachments/assets/6c248b88-0e12-4e3a-bb55-ae326f4fa996" />
+
+
+
 另外，这个代码其实很极限了，如果加功能的话可能会崩溃哦
