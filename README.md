@@ -2,6 +2,9 @@
 专门为华为墨水屏做到一个徽章，包含外壳3df文件，使用的是micropython固件，包含py和HTML.js代码
 
 固件下载地址https://www.micropython.org/download/LOLIN_C3_MINI/
+
+
+
 代码完全开源，可以选择自己进行更改，接线图也会放在这里
 
 ESP32 引脚 (丝印)	对应模块	                模块引脚名称	功能说明
